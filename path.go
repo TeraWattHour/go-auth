@@ -1,11 +1,14 @@
 package goauth
 
-import "strings"
+import (
+	"strings"
+)
 
 type notFound struct{}
 type signOut struct{}
 type providers struct{}
 type unmatched struct{}
+type csrf struct{}
 type provider struct {
 	providerId string
 }
@@ -27,6 +30,8 @@ func parsePath(path, basePath string) any {
 
 	if len(parts) == 1 {
 		switch parts[0] {
+		case "csrf":
+			return csrf{}
 		case "providers":
 			return providers{}
 		case "sign-out":

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	goauth "github.com/TeraWattHour/go-auth"
+	"github.com/TeraWattHour/go-auth"
 	"golang.org/x/oauth2"
 	"net/http"
 	"time"
@@ -32,18 +32,11 @@ func (c *GithubConfig) ID() string {
 	return "github"
 }
 
-func (c *GithubConfig) Info() any {
-	return map[string]any{
-		"id":   c.ID(),
-		"name": "GitHub",
-	}
-}
-
 func (c *GithubConfig) Config() *oauth2.Config {
 	return c.config
 }
 
-func (c *GithubConfig) FetchUserDetails(client *http.Client) (*goauth.OAuthUserDetails, error) {
+func (c *GithubConfig) FetchUserData(client *http.Client) (*goauth.OAuthUserDetails, error) {
 	var user GithubUser
 	if err := c.fetch(client, "GET", "https://api.github.com/user", &user); err != nil {
 		return nil, err

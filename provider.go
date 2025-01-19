@@ -7,14 +7,13 @@ import (
 
 type Provider interface {
 	ID() string
-	Info() any
 }
 
 type OAuthProvider interface {
 	Provider
 
 	Config() *oauth2.Config
-	FetchUserData(client *http.Client) (OAuthUserDetails, error)
+	FetchUserData(client *http.Client) (*OAuthUserDetails, error)
 }
 
 type OAuthUserDetails struct {

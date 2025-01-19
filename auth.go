@@ -61,19 +61,11 @@ func (a *Auth) BasePath() string {
 	return a.basePath
 }
 
-func (a *Auth) ProviderInfo() map[string]any {
-	info := make(map[string]any)
-
-	for id, provider := range a.providers {
-		info[id] = provider.Info()
-	}
-
-	return info
-}
-
 func (a *Auth) Handlers(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch path := parsePath(r.URL.Path, a.basePath).(type) {
+		case csrf:
+			a.csrfHandler(w, r)
 		case provider:
 			a.providerHandler(path, w, r)
 		case callback:
@@ -162,7 +154,7 @@ func (a *Auth) Middleware(next http.Handler) http.Handler {
 	})
 }
 
-func (a *Auth) signInOAuth(provider OAuthProvider, userDetails OAuthUserDetails) (string, error) {
+func (a *Auth) signInOAuth(provider OAuthProvider, userDetails *OAuthUserDetails) (string, error) {
 	accountId, accountExists, err := a.adapter.GetAccountId(provider.ID(), userDetails.ProviderAccountId)
 	if err != nil {
 		return "", err

@@ -5,17 +5,62 @@ import (
 	"encoding/json"
 	"github.com/gofiber/fiber/v2/log"
 	"golang.org/x/oauth2"
+	"maps"
 	"net/http"
+	"slices"
 	"time"
 )
 
-func (a *Auth) providerCallbackHandler(path callback, w http.ResponseWriter, r *http.Request) {
-	defer http.SetCookie(w, &http.Cookie{
-		Name:    CsrfCookie,
-		Value:   "",
-		Path:    "/",
-		Expires: time.Unix(0, 0),
+func (a *Auth) csrfHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	verifier := oauth2.GenerateVerifier()
+	hash := generateHMAC(verifier, a.stateSecret)
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     CsrfCookie,
+		Value:    verifier,
+		Path:     "/",
+		Secure:   a.options.CookieSecure,
+		SameSite: http.SameSiteLaxMode,
+		HttpOnly: true,
 	})
+
+	_, _ = w.Write([]byte(hash))
+}
+
+func (a *Auth) providerHandler(path provider, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	provider, ok := a.providers[path.providerId].(OAuthProvider)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	verifier, hash, err := a.applyState(w)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	url := provider.Config().AuthCodeURL(hash, oauth2.AccessTypeOffline, oauth2.S256ChallengeOption(verifier))
+
+	if r.Header.Get("X-NoRedirect") != "" {
+		_, _ = w.Write([]byte(url))
+	} else {
+		http.Redirect(w, r, url, http.StatusTemporaryRedirect)
+	}
+}
+
+func (a *Auth) providerCallbackHandler(path callback, w http.ResponseWriter, r *http.Request) {
+	defer removeCookie(CsrfCookie, w)
 
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -29,13 +74,8 @@ func (a *Auth) providerCallbackHandler(path callback, w http.ResponseWriter, r *
 	}
 
 	sessionVerifierCookie, err := r.Cookie(CsrfCookie)
-	if err != nil {
-		http.Error(w, "CSRF token must be present", http.StatusBadRequest)
-		return
-	}
-
-	if generateHMAC(sessionVerifierCookie.Value, a.stateSecret) != r.URL.Query().Get("state") {
-		http.Error(w, "Malformed CSRF token", http.StatusBadRequest)
+	if err != nil || generateHMAC(sessionVerifierCookie.Value, a.stateSecret) != r.URL.Query().Get("state") {
+		http.Error(w, "Invalid CSRF token", http.StatusForbidden)
 		return
 	}
 
@@ -97,7 +137,7 @@ func (a *Auth) providersHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	by, err := json.Marshal(a.ProviderInfo())
+	by, err := json.Marshal(slices.Collect(maps.Keys(a.providers)))
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
@@ -107,29 +147,18 @@ func (a *Auth) providersHandler(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(by)
 }
 
-func (a *Auth) providerHandler(path provider, w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+func (a *Auth) signOutHandler(w http.ResponseWriter, r *http.Request) {
+	defer removeCookie(CsrfCookie, w)
+
+	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
 
-	if provider, ok := a.providers[path.providerId].(OAuthProvider); ok {
-		verifier, hash, err := a.applyState(w)
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-
-		url := provider.Config().AuthCodeURL(hash, oauth2.AccessTypeOffline, oauth2.S256ChallengeOption(verifier))
-		http.Redirect(w, r, url, http.StatusTemporaryRedirect)
-	} else {
-		http.NotFound(w, r)
-	}
-}
-
-func (a *Auth) signOutHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.WriteHeader(http.StatusMethodNotAllowed)
+	csrfHash := r.Header.Get("X-Csrf-Token")
+	csrfCookie, err := r.Cookie(CsrfCookie)
+	if err != nil || generateHMAC(csrfCookie.Value, a.stateSecret) != csrfHash {
+		http.Error(w, "Invalid CSRF token", http.StatusForbidden)
 		return
 	}
 
@@ -137,4 +166,14 @@ func (a *Auth) signOutHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+}
+
+func removeCookie(name string, w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     name,
+		Value:    "",
+		Path:     "/",
+		Expires:  time.Unix(0, 0),
+		HttpOnly: true,
+	})
 }
