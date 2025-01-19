@@ -23,7 +23,9 @@ func TestMiddlewareFiber(t *testing.T) {
 	}
 	defer db.Close()
 
-	auth := goauth.NewAuth("/api/auth", adapters.NewPostgresAdapter(db), []goauth.Provider{
+	adapter := adapters.NewPostgresAdapter(db)
+
+	auth := goauth.NewAuth("/api/auth", adapter, []goauth.Provider{
 		providers.Github(os.Getenv("ClientId"), os.Getenv("ClientSecret")),
 	})
 
