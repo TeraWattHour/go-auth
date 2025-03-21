@@ -17,18 +17,7 @@ func (a *Auth) csrfHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	verifier := oauth2.GenerateVerifier()
-	hash := generateHMAC(verifier, a.stateSecret)
-
-	http.SetCookie(w, &http.Cookie{
-		Name:     CsrfCookie,
-		Value:    verifier,
-		Path:     "/",
-		Secure:   a.options.CookieSecure,
-		SameSite: http.SameSiteLaxMode,
-		HttpOnly: true,
-	})
-
+	_, hash := a.csrfCookie(w)
 	_, _ = w.Write([]byte(hash))
 }
 
@@ -44,13 +33,8 @@ func (a *Auth) providerHandler(path provider, w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	verifier, hash, err := a.applyState(w)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	url := provider.Config().AuthCodeURL(hash, oauth2.AccessTypeOffline, oauth2.S256ChallengeOption(verifier))
+	token, hash := a.csrfCookie(w)
+	url := provider.Config().AuthCodeURL(hash, oauth2.AccessTypeOffline, oauth2.S256ChallengeOption(token))
 
 	if r.Header.Get("X-NoRedirect") != "" {
 		_, _ = w.Write([]byte(url))

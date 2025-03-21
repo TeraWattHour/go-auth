@@ -84,6 +84,7 @@ func (a *Auth) Handlers(next http.Handler) http.Handler {
 
 // SignOut signs out a user based on the value of the sessionId found in the request's cookies.
 // Method **does not** send any status codes on fail, instead returning the encountered error.
+// Not CSRF-protected.
 func (a *Auth) SignOut(w http.ResponseWriter, r *http.Request) error {
 	cookie, err := r.Cookie(SessionCookie)
 	if err != nil {
@@ -202,12 +203,14 @@ func (a *Auth) signInOAuth(provider OAuthProvider, userDetails *OAuthUserDetails
 	return userId, nil
 }
 
-func (a *Auth) applyState(w http.ResponseWriter) (string, string, error) {
+// csrfCookie sets a CSRF cookie with the generated random string as value.
+// Returns the random string and its hashed representation (using a secret).
+func (a *Auth) csrfCookie(w http.ResponseWriter) (string, string) {
 	verifier := oauth2.GenerateVerifier()
 	hash := generateHMAC(verifier, a.stateSecret)
 
 	http.SetCookie(w, &http.Cookie{
-		Name:     "go-auth_csrf",
+		Name:     CsrfCookie,
 		Value:    verifier,
 		Path:     "/",
 		Secure:   a.options.CookieSecure,
@@ -215,7 +218,7 @@ func (a *Auth) applyState(w http.ResponseWriter) (string, string, error) {
 		SameSite: http.SameSiteLaxMode,
 	})
 
-	return verifier, hash, nil
+	return verifier, hash
 }
 
 func generateHMAC(data, secret string) string {
