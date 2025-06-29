@@ -6,14 +6,12 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"github.com/gofiber/fiber/v2/log"
-	"golang.org/x/oauth2"
 	"net/http"
 	"time"
-)
 
-const SessionCookie = "go-auth_session"
-const CsrfCookie = "go-auth_csrf"
+	"github.com/gofiber/fiber/v2/log"
+	"golang.org/x/oauth2"
+)
 
 type Auth struct {
 	basePath  string
@@ -86,7 +84,7 @@ func (a *Auth) Handlers(next http.Handler) http.Handler {
 // Method **does not** send any status codes on fail, instead returning the encountered error.
 // Not CSRF-protected.
 func (a *Auth) SignOut(w http.ResponseWriter, r *http.Request) error {
-	cookie, err := r.Cookie(SessionCookie)
+	cookie, err := r.Cookie(a.options.SessionCookieName)
 	if err != nil {
 		if errors.Is(err, http.ErrNoCookie) {
 			return nil
@@ -98,20 +96,13 @@ func (a *Auth) SignOut(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 
-	http.SetCookie(w, &http.Cookie{
-		Name:     SessionCookie,
-		Path:     "/",
-		Value:    "",
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Expires:  time.Unix(0, 0),
-	})
+	removeCookie(a.options.SessionCookieName, a.options.CookieDomain, w)
 
 	return nil
 }
 
 func (a *Auth) Authenticate(r *http.Request) (string, bool, error) {
-	cookie, err := r.Cookie(SessionCookie)
+	cookie, err := r.Cookie(a.options.SessionCookieName)
 	if err != nil {
 		if errors.Is(err, http.ErrNoCookie) {
 			return "", false, nil
@@ -210,15 +201,39 @@ func (a *Auth) csrfCookie(w http.ResponseWriter) (string, string) {
 	hash := generateHMAC(verifier, a.stateSecret)
 
 	http.SetCookie(w, &http.Cookie{
-		Name:     CsrfCookie,
+		Secure:   a.options.CookieSecure,
+		SameSite: a.options.CookieSameSite,
+		Domain:   a.options.CookieDomain,
+
+		Name:     a.options.CsrfCookieName,
 		Value:    verifier,
 		Path:     "/",
-		Secure:   a.options.CookieSecure,
 		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
 	})
 
 	return verifier, hash
+}
+
+func (a *Auth) success(r *http.Request, w http.ResponseWriter) {
+	if a.options.SuccessRedirectUrl != "" {
+		http.Redirect(w, r, a.options.SuccessRedirectUrl, http.StatusFound)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func (a *Auth) failure(r *http.Request, w http.ResponseWriter, statusCode ...int) {
+	if a.options.FailureRedirectUrl != "" {
+		http.Redirect(w, r, a.options.FailureRedirectUrl, http.StatusFound)
+		return
+	}
+
+	if len(statusCode) == 1 {
+		w.WriteHeader(statusCode[0])
+	} else {
+		w.WriteHeader(http.StatusInternalServerError)
+	}
 }
 
 func generateHMAC(data, secret string) string {

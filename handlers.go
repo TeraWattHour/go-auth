@@ -3,12 +3,12 @@ package goauth
 import (
 	"context"
 	"encoding/json"
-	"github.com/gofiber/fiber/v2/log"
-	"golang.org/x/oauth2"
 	"maps"
 	"net/http"
 	"slices"
 	"time"
+
+	"golang.org/x/oauth2"
 )
 
 func (a *Auth) csrfHandler(w http.ResponseWriter, r *http.Request) {
@@ -44,22 +44,22 @@ func (a *Auth) providerHandler(path provider, w http.ResponseWriter, r *http.Req
 }
 
 func (a *Auth) providerCallbackHandler(path callback, w http.ResponseWriter, r *http.Request) {
-	defer removeCookie(CsrfCookie, w)
+	defer removeCookie(a.options.CsrfCookieName, a.options.CookieDomain, w)
 
 	if r.Method != http.MethodGet {
-		w.WriteHeader(http.StatusMethodNotAllowed)
+		a.failure(r, w, http.StatusMethodNotAllowed)
 		return
 	}
 
 	provider, ok := a.providers[path.providerId].(OAuthProvider)
 	if !ok {
-		http.NotFound(w, r)
+		a.failure(r, w, http.StatusNotFound)
 		return
 	}
 
-	sessionVerifierCookie, err := r.Cookie(CsrfCookie)
+	sessionVerifierCookie, err := r.Cookie(a.options.CsrfCookieName)
 	if err != nil || generateHMAC(sessionVerifierCookie.Value, a.stateSecret) != r.URL.Query().Get("state") {
-		http.Error(w, "Invalid CSRF token", http.StatusForbidden)
+		a.failure(r, w, http.StatusUnauthorized)
 		return
 	}
 
@@ -67,13 +67,13 @@ func (a *Auth) providerCallbackHandler(path callback, w http.ResponseWriter, r *
 	case OAuthProvider:
 		code := r.URL.Query().Get("code")
 		if code == "" {
-			http.Error(w, "No code provided", http.StatusBadRequest)
+			a.failure(r, w, http.StatusUnauthorized)
 			return
 		}
 
 		token, err := provider.Config().Exchange(context.Background(), code, oauth2.VerifierOption(sessionVerifierCookie.Value))
 		if err != nil {
-			w.WriteHeader(http.StatusUnauthorized)
+			a.failure(r, w, http.StatusUnauthorized)
 			return
 		}
 
@@ -81,37 +81,37 @@ func (a *Auth) providerCallbackHandler(path callback, w http.ResponseWriter, r *
 
 		userDetails, err := provider.FetchUserData(client)
 		if err != nil {
-			w.WriteHeader(http.StatusUnauthorized)
+			a.failure(r, w, http.StatusUnauthorized)
 			return
 		}
 
 		userId, err := a.signInOAuth(provider, userDetails)
 		if err != nil {
-			log.Error("error while processing OAuth callback", err)
-			w.WriteHeader(http.StatusInternalServerError)
+			a.failure(r, w, http.StatusUnauthorized)
 			return
 		}
 
 		sessionId, expiresAt, err := a.adapter.CreateSession(userId)
 		if err != nil {
-			log.Error("error while creating session", err)
-			w.WriteHeader(http.StatusInternalServerError)
+			a.failure(r, w, http.StatusUnauthorized)
 			return
 		}
 
 		http.SetCookie(w, &http.Cookie{
-			Name:     SessionCookie,
+			Name:     a.options.SessionCookieName,
+			Domain:   a.options.CookieDomain,
+			Secure:   a.options.CookieSecure,
+			SameSite: a.options.CookieSameSite,
+
 			Value:    sessionId,
 			Path:     "/",
 			Expires:  expiresAt,
 			HttpOnly: true,
-			Secure:   a.options.CookieSecure,
-			SameSite: http.SameSiteLaxMode,
 		})
 
-		http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
+		a.success(r, w)
 	default:
-		http.NotFound(w, r)
+		a.failure(r, w, http.StatusNotFound)
 	}
 }
 
@@ -132,7 +132,7 @@ func (a *Auth) providersHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *Auth) signOutHandler(w http.ResponseWriter, r *http.Request) {
-	defer removeCookie(CsrfCookie, w)
+	defer removeCookie(a.options.CsrfCookieName, a.options.CookieDomain, w)
 
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -140,7 +140,7 @@ func (a *Auth) signOutHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	csrfHash := r.Header.Get("X-Csrf-Token")
-	csrfCookie, err := r.Cookie(CsrfCookie)
+	csrfCookie, err := r.Cookie(a.options.CsrfCookieName)
 	if err != nil || generateHMAC(csrfCookie.Value, a.stateSecret) != csrfHash {
 		http.Error(w, "Invalid CSRF token", http.StatusForbidden)
 		return
@@ -152,9 +152,10 @@ func (a *Auth) signOutHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func removeCookie(name string, w http.ResponseWriter) {
+func removeCookie(name string, domain string, w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     name,
+		Domain:   domain,
 		Value:    "",
 		Path:     "/",
 		Expires:  time.Unix(0, 0),
